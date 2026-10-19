@@ -1,10 +1,14 @@
 version: 2
 updates:
   # One root lockfile for the whole npm workspace (backend + frontend).
+  # Every ecosystem waits 7 days before proposing a newly published version
+  # (same window as min-release-age in .npmrc); security updates are not delayed.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       nestjs:
@@ -16,18 +20,26 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: /apps/backend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: /apps/frontend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: gomod
     directory: /apps/frontend/caddy
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

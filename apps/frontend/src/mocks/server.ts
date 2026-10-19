@@ -28,6 +28,13 @@ function newId(): string {
   return crypto.randomUUID();
 }
 
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+/** A fresh 160-bit base32 TOTP secret, like the API's: every setup call rotates it. */
+function newTotpSecret(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => BASE32_ALPHABET[byte % 32]).join('');
+}
+
 export interface MockRequest {
   method: string;
   path: string;
@@ -87,8 +94,8 @@ type PublicHandler = (ctx: Omit<Ctx, 'user' | 'session'>) => MockResponse;
 
 interface Route {
   method: string;
-  pattern: RegExp;
-  keys: string[];
+  /** The path split on "/"; a `:name` segment captures one non-empty path segment. */
+  segments: string[];
   access: Access;
   handler: Handler | PublicHandler;
 }
@@ -379,14 +386,20 @@ const routes: Route[] = [];
 function route(method: string, path: string, access: 'public', handler: PublicHandler): void;
 function route(method: string, path: string, access: readonly UserRole[], handler: Handler): void;
 function route(method: string, path: string, access: Access, handler: Handler | PublicHandler): void {
-  const keys: string[] = [];
-  const pattern = new RegExp(
-    `^${path.replace(/:(\w+)/g, (_, key: string) => {
-      keys.push(key);
-      return '([^/]+)';
-    })}$`,
-  );
-  routes.push({ method, pattern, keys, access, handler });
+  routes.push({ method, segments: path.split('/'), access, handler });
+}
+
+/** The raw (still percent-encoded) path params when `path` matches the route segments, otherwise null. */
+function matchSegments(segments: readonly string[], path: string): Record<string, string> | null {
+  const parts = path.split('/');
+  if (parts.length !== segments.length) return null;
+  const params: Record<string, string> = {};
+  for (const [index, segment] of segments.entries()) {
+    const part = parts[index];
+    if (segment.startsWith(':') && part) params[segment.slice(1)] = part;
+    else if (segment !== part) return null;
+  }
+  return params;
 }
 
 // --- auth ------------------------------------------------------------------
@@ -416,9 +429,10 @@ route('POST', '/auth/mfa/setup', 'public', ({ req, db }) => {
   const entry = consumeMfaToken(db, record.mfaToken, 'setup');
   const user = db.users.find((candidate) => candidate.id === entry.userId);
   if (!user) unauthorized();
+  const secret = newTotpSecret();
   return ok({
-    secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
-    otpauthUrl: `otpauth://totp/MeningFermam:${user.phone.slice(0, 6)}*****?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=MeningFermam&algorithm=SHA1&digits=6&period=30`,
+    secret,
+    otpauthUrl: `otpauth://totp/MeningFermam:${user.phone.slice(0, 6)}*****?secret=${secret}&issuer=MeningFermam&algorithm=SHA1&digits=6&period=30`,
   });
 });
 
@@ -1646,15 +1660,15 @@ export function createMockServer(db: MockDb = createSeedDb()): MockServer {
   return {
     db,
     handle(request) {
-      const candidates = routes.filter((candidate) => candidate.pattern.test(request.path));
+      const candidates = routes.filter((candidate) => matchSegments(candidate.segments, request.path));
       const matched = candidates.find((candidate) => candidate.method === request.method);
       try {
         if (!matched) {
           if (candidates.length > 0) fail(405, 'METHOD_NOT_ALLOWED', 'Bu amal qo‘llab-quvvatlanmaydi');
           notFound();
         }
-        const values = matched.pattern.exec(request.path)?.slice(1) ?? [];
-        const params = Object.fromEntries(matched.keys.map((key, index) => [key, decodeURIComponent(values[index] ?? '')]));
+        const raw = matchSegments(matched.segments, request.path) ?? {};
+        const params = Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, decodeURIComponent(value)]));
         if (params.id !== undefined && !UUID.test(params.id) && !request.path.startsWith('/auth/sessions')) {
           fail(400, 'INVALID_ID', 'Identifikator noto‘g‘ri');
         }

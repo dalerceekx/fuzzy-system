@@ -75,9 +75,14 @@ describe('GitHub workflows', () => {
   });
 
   it('pins scanner and service images to explicit versions', () => {
-    const images = [...ci.matchAll(/(?:IMAGE: |image: )(\S+)/g)].map(
-      (m) => m[1],
+    // Images built by this workflow (build-push-action `tags:`) are never
+    // pulled from a registry, so there is no version to pin.
+    const built = new Set(
+      [...ci.matchAll(/^\s+tags: (\S+)$/gm)].map((m) => m[1]),
     );
+    const images = [...ci.matchAll(/(?:IMAGE: |image: )(\S+)/g)]
+      .map((m) => m[1])
+      .filter((image) => !built.has(image));
     expect(images.length).toBeGreaterThanOrEqual(5);
     for (const image of images) {
       expect(image).toMatch(/:v?\d+\.\d+(\.\d+)?([-.][\w.]+)?$/);

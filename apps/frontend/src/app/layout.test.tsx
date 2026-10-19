@@ -17,7 +17,8 @@ afterEach(() => resetClientState());
 
 const tabBar = () => screen.findByRole('navigation', { name: 'Asosiy menyu' });
 /** A sheet tab by its label; the low-stock badge may add ", N ta yem kam qoldi" to the name. */
-const sheetButton = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}(, .*)?$`) });
+const sheetButton = (name: string) =>
+  screen.getByRole('button', { name: (accessibleName) => accessibleName === name || accessibleName.startsWith(`${name}, `) });
 /** Visible sheet (closed sheets are aria-hidden and inert). */
 const sheet = (name: string) => screen.queryByRole('navigation', { name });
 const tabLabels = (nav: HTMLElement) => [...nav.querySelectorAll('.tab-label')].map((label) => label.textContent);

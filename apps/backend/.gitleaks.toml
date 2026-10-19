@@ -28,19 +28,31 @@ regexes = [
   '''meningfermam_app_dev''',
   '''Demo(Admin|Farmer)123!''',
   '''<[a-z0-9_ -]+>''',
+  # Example password of the mock-mode API request samples
+  '''Mustahkam-parol-2026''',
 ]
 
 [[allowlists]]
-description = "Test-only fixtures and the CI service-container password"
+description = "Test-only fixtures, the CI service-container password and the smoke-test stack"
 condition = "AND"
 regexTarget = "line"
 paths = [
   '''^apps/backend/test/''',
   '''^apps/backend/src/.*\.spec\.ts$''',
+  '''^apps/frontend/src/.*\.test\.tsx?$''',
   '''^\.github/workflows/ci\.yml$''',
+  '''^deploy/aws/smoke\.mjs$''',
 ]
 regexes = [
   '''test-only''',
   '''ci_only_password''',
   '''Test-password-123''',
+  # Throwaway test passwords ("Yangi-parol-2026", "Yangi2026parol")
+  '''[A-Z][a-z]+-parol-\d+''',
+  '''Yangi2026parol''',
+  '''sk-test-''',
+  # base64 of "dev-only-…" (DATA_ENCRYPTION_KEY fixture)
+  '''ZGV2LW9ubHkt''',
+  # Throwaway MinIO credentials of the local HTTPS smoke stack
+  '''smoke-secret-key-''',
 ]
