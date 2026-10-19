@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22.23.3-alpine3.24 AS build
+FROM node:26.11.1-alpine3.24 AS build
 WORKDIR /repo
 COPY package.json package-lock.json .npmrc ./
 COPY apps/backend/package.json apps/backend/
