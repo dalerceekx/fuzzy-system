@@ -1,0 +1,45 @@
+{
+  "name": "meningfermam",
+  "version": "0.0.1",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Mening Fermam monorepo: NestJS backend + React frontend",
+  "packageManager": "npm@11.19.0",
+  "workspaces": [
+    "apps/backend",
+    "apps/frontend"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start:dev": "npm run start:dev -w apps/backend",
+    "start:dev:all": "npm run dev:up && npm run dev:web",
+    "dev:up": "npm run dev:up -w apps/backend",
+    "dev:down": "npm run dev:down -w apps/backend",
+    "dev:logs": "npm run dev:logs -w apps/backend",
+    "dev:restart": "npm run dev:restart -w apps/backend",
+    "dev:reset": "npm run dev:reset -w apps/backend",
+    "dev:web": "npm run dev -w apps/frontend",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e -w apps/backend",
+    "audit:deps": "npm audit --audit-level=high",
+    "aws:prepare": "node deploy/aws/prepare.mjs",
+    "aws:package": "bash deploy/aws/package.sh",
+    "test:deploy": "node --test deploy/aws/prepare.test.mjs",
+    "test:deploy:smoke": "node deploy/aws/smoke.mjs"
+  },
+  "overrides": {
+    "undici": "6.29.1",
+    "tmp": "0.2.7"
+  },
+  "allowScripts": {
+    "prisma": true,
+    "@prisma/engines": true,
+    "esbuild": true,
+    "@scarf/scarf": false,
+    "fsevents": false
+  }
+}

@@ -1,0 +1,232 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege for every job; nothing here needs to write to the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22.23.3"
+  # Scanner images are pinned to explicit versions (Dependabot bumps them).
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
+  SEMGREP_IMAGE: semgrep/semgrep:1.181.0
+  TRIVY_IMAGE: aquasec/trivy:0.76.0
+
+jobs:
+  # Backend jobs run in apps/backend; the frontend has its own jobs, owned by
+  # the frontend. Dependency audit, secret scanning and SAST cover the whole
+  # repository.
+  quality:
+    name: Backend — typecheck, lint, format, unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (lockfile only)
+        working-directory: .
+        run: npm ci --no-fund
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      - name: AWS configuration generator tests
+        working-directory: .
+        run: npm run test:deploy
+
+  e2e:
+    name: Backend — e2e (PostgreSQL + Redis)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/backend
+    services:
+      postgres:
+        # Same images as compose.dev.yaml; bump them together.
+        image: postgres:16.15-alpine3.24
+        env:
+          POSTGRES_USER: meningfermam
+          # CI-only throwaway credential for an ephemeral service container.
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: meningfermam_test
+          TZ: UTC
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U meningfermam -d meningfermam_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4.11-alpine3.21
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://meningfermam:ci_only_password@127.0.0.1:5432/meningfermam_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (lockfile only)
+        working-directory: .
+        run: npm ci --no-fund
+      - run: npx prisma generate
+      - run: npm run test:e2e
+
+  audit:
+    name: Dependency audit (fails on high/critical)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # One lockfile for the whole monorepo: covers backend and frontend.
+      - run: npm audit --audit-level=high
+
+  secrets:
+    name: Secret scanning (gitleaks, full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        # safe.directory: the checkout is owned by the runner user, not the
+        # container's root.
+        run: >-
+          docker run --rm --network none
+          -e GIT_CONFIG_COUNT=1
+          -e GIT_CONFIG_KEY_0=safe.directory
+          -e GIT_CONFIG_VALUE_0=/repo
+          -v "$GITHUB_WORKSPACE:/repo:ro"
+          "$GITLEAKS_IMAGE"
+          git /repo
+          --config /repo/apps/backend/.gitleaks.toml
+          --redact --verbose --exit-code 1
+
+  sast:
+    name: Static analysis (semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: semgrep
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/src"
+          -w /src
+          "$SEMGREP_IMAGE"
+          semgrep scan
+          --config p/default
+          --config p/nodejs
+          --config p/typescript
+          --config p/secrets
+          --config apps/backend/.semgrep.yml
+          --exclude test
+          --exclude '*.spec.ts'
+          --exclude '*.e2e-spec.ts'
+          --exclude generated
+          --exclude .env.example
+          --error --metrics=off --disable-version-check
+
+  docker:
+    name: Production images — build, HTTPS smoke + Trivy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # Monorepo root: the workspace lockfile lives there.
+          context: .
+          file: apps/backend/Dockerfile
+          push: false
+          load: true
+          tags: meningfermam-api:ci
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/frontend/Dockerfile
+          push: false
+          load: true
+          tags: riizq-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - name: Production migrations, DB permissions and HTTPS smoke (no AWS/SMS)
+        env:
+          SMOKE_API_IMAGE: meningfermam-api:ci
+          SMOKE_WEB_IMAGE: riizq-web:ci
+        run: npm run test:deploy:smoke
+      - name: Image runs as non-root and contains no seed/sources/.env
+        run: |
+          test "$(docker image inspect -f '{{.Config.User}}' meningfermam-api:ci)" = "10001:10001"
+          docker run --rm --entrypoint sh meningfermam-api:ci -c '
+            set -eu
+            test "$(id -u)" = 10001
+            for path in prisma/seed.ts prisma/demo src test .env .env.example; do
+              if [ -e "$path" ]; then echo "unexpected: $path"; exit 1; fi
+            done
+            if command -v npm || command -v npx; then echo "package manager present"; exit 1; fi
+            test -f dist/main.js
+          '
+      - name: Trivy image scan
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock:ro
+          "$TRIVY_IMAGE"
+          image
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 1
+          --no-progress
+          meningfermam-api:ci
+      - name: Frontend image scan
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock:ro
+          "$TRIVY_IMAGE"
+          image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+          riizq-web:ci

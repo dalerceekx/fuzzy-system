@@ -1,0 +1,127 @@
+name: riizq
+
+x-common: &common
+  restart: unless-stopped
+  init: true
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options: { max-size: '20m', max-file: '3' }
+
+x-api: &api
+  <<: *common
+  image: ${API_IMAGE:?API_IMAGE required}
+  build:
+    context: ../..
+    dockerfile: apps/backend/Dockerfile
+  user: '10001:10001'
+  read_only: true
+  tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=64m']
+  cap_drop: [ALL]
+  mem_limit: 768m
+  stop_grace_period: 30s
+  networks: [data, edge]
+
+services:
+  web:
+    <<: *common
+    image: ${WEB_IMAGE:?WEB_IMAGE required}
+    build:
+      context: ../..
+      dockerfile: apps/frontend/Dockerfile
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN required}
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    # Also works on hosts where unprivileged ports start at 1024.
+    cap_add: [NET_BIND_SERVICE]
+    mem_limit: 256m
+    ports:
+      - '${HTTP_BIND:-0.0.0.0:80}:80'
+      - '${HTTPS_BIND:-0.0.0.0:443}:443'
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+
+  api:
+    <<: *api
+    env_file:
+      - path: ${RIIZQ_CONFIG_DIR:?Use compose.sh}/api.env
+        format: raw
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  migrate:
+    <<: *api
+    profiles: [release]
+    restart: 'no'
+    command: [migrate]
+    healthcheck: { disable: true }
+    networks: [data]
+    env_file:
+      - path: ${RIIZQ_CONFIG_DIR}/migrate.env
+        format: raw
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  postgres:
+    <<: *common
+    image: postgres:16.15-alpine3.24
+    env_file:
+      - path: ${RIIZQ_CONFIG_DIR}/postgres.env
+        format: raw
+    environment: { TZ: UTC, PGTZ: UTC }
+    mem_limit: 768m
+    shm_size: 128m
+    stop_grace_period: 60s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/01-riizq.sh:ro
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d meningfermam']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    <<: *common
+    image: redis:7.4.11-alpine3.21
+    # Root entrypoint reads the 0600 file, then drops to the redis user.
+    entrypoint: [sh, /usr/local/etc/redis/start.sh]
+    env_file:
+      - path: ${RIIZQ_CONFIG_DIR}/redis.env
+        format: raw
+    mem_limit: 384m
+    volumes:
+      - redis_data:/data
+      - ./redis-start.sh:/usr/local/etc/redis/start.sh:ro
+    networks: [data]
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+networks:
+  edge:
+  data:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

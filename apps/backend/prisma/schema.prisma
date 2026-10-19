@@ -1,0 +1,812 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// NOTE: CHECK constraints, partial unique indexes, immutability triggers and
+// grants live in the migration SQL (Prisma cannot express them). Prisma
+// ignores those objects when diffing, so they are not dropped by later
+// `prisma migrate dev` runs. Keep them in sync when changing these models.
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// Order matches the database enum (values were appended by migrations).
+enum UserRole {
+  ADMIN
+  FARMER
+  SUPER_ADMIN
+  SUPPORT
+  VET
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  BLOCKED
+  ARCHIVED
+}
+
+enum SessionRevokeReason {
+  LOGOUT
+  LOGOUT_ALL
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+  ROLE_CHANGED
+  USER_BLOCKED
+  USER_ARCHIVED
+  REFRESH_TOKEN_REUSE
+  MFA_RESET
+  ADMIN_REVOKED
+}
+
+enum OtpPurpose {
+  PHONE_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum SmsStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum FileScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+  FAILED
+}
+
+enum Species {
+  CATTLE
+  SHEEP
+  GOAT
+  HORSE
+  POULTRY
+  OTHER
+}
+
+enum AnimalSex {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+enum InventoryCategory {
+  MEDICINE
+  FEED
+  EQUIPMENT
+  OTHER
+}
+
+enum InventoryUnit {
+  PIECE
+  KG
+  G
+  L
+  ML
+  DOSE
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+enum MedicineStatus {
+  DRAFT
+  APPROVED
+  ARCHIVED
+}
+
+enum ProtocolVersionStatus {
+  DRAFT
+  APPROVED
+  SUPERSEDED
+  ARCHIVED
+}
+
+enum DoseUnit {
+  MG
+  ML
+}
+
+enum AdministrationRoute {
+  IM
+  IV
+  SC
+  ORAL
+  TOPICAL
+  INTRAMAMMARY
+  OTHER
+}
+
+enum TreatmentStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+// Parameter set a ration is validated against (src/rations/ration-profiles.ts).
+enum RationProfile {
+  BULL
+  COW
+  RAM
+  EWE
+  OTHER
+}
+
+enum FeedingPurpose {
+  FATTENING
+  MAINTENANCE
+  MILK
+  BREEDING
+}
+
+enum PhysiologicalState {
+  NORMAL
+  PREGNANT
+  LACTATING
+  DRY
+}
+
+// Animals a disease reference entry applies to (explicit table in
+// src/diseases/disease-animals.ts, never parsed from the text).
+enum DiseaseAnimal {
+  CATTLE
+  CALF
+  SHEEP
+  LAMB
+}
+
+// Disease reference content is the source text verbatim; there is no vet
+// approval flow for it ("Manba matni — veterinar tasdig‘i talab qilinadi").
+enum DiseaseInfoStatus {
+  SOURCE_TEXT
+}
+
+// ---------------------------------------------------------------------------
+// Identity, sessions, verification
+// ---------------------------------------------------------------------------
+
+model User {
+  id                  String     @id @default(uuid()) @db.Uuid
+  // Normalized E.164 (+998XXXXXXXXX). CHECK constraint enforces the format.
+  phone               String     @unique @db.VarChar(16)
+  // citext: case-insensitive uniqueness; the app also stores it lower-cased.
+  email               String?    @unique @db.Citext
+  fullName            String     @map("full_name") @db.VarChar(100)
+  passwordHash        String     @map("password_hash") @db.VarChar(255)
+  role                UserRole   @default(FARMER)
+  status              UserStatus @default(PENDING_VERIFICATION)
+  phoneVerifiedAt     DateTime?  @map("phone_verified_at")
+  isDemo              Boolean    @default(false) @map("is_demo")
+  // TOTP secrets are AES-256-GCM encrypted with DATA_ENCRYPTION_KEY.
+  mfaEnabled          Boolean    @default(false) @map("mfa_enabled")
+  mfaSecretEnc        String?    @map("mfa_secret_enc") @db.VarChar(512)
+  mfaPendingSecretEnc String?    @map("mfa_pending_secret_enc") @db.VarChar(512)
+  // Last accepted TOTP time step; codes for this step or earlier are replays.
+  mfaLastUsedStep     Int?       @map("mfa_last_used_step")
+  passwordChangedAt   DateTime?  @map("password_changed_at")
+  blockedAt           DateTime?  @map("blocked_at")
+  blockedReason       String?    @map("blocked_reason") @db.VarChar(500)
+  archivedAt          DateTime?  @map("archived_at")
+  lastLoginAt         DateTime?  @map("last_login_at")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+
+  sessions                 Session[]
+  otpCodes                 OtpCode[]
+  farms                    Farm[]
+  files                    StoredFile[]
+  idempotencyKeys          IdempotencyKey[]
+  auditLogs                AuditLog[]        @relation("AuditActor")
+  stockMovements           StockMovement[]   @relation("StockMovementActor")
+  medicinesCreated         Medicine[]        @relation("MedicineCreatedBy")
+  medicinesApproved        Medicine[]        @relation("MedicineApprovedBy")
+  protocolsCreated         Protocol[]        @relation("ProtocolCreatedBy")
+  protocolVersionsCreated  ProtocolVersion[] @relation("ProtocolVersionCreatedBy")
+  protocolVersionsApproved ProtocolVersion[] @relation("ProtocolVersionApprovedBy")
+  treatmentsStarted        Treatment[]       @relation("TreatmentStartedBy")
+  rationIssues             RationIssue[]     @relation("RationIssueActor")
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+// One row per login = one refresh-token family. The refresh token carries
+// (sid = id, jti = currentRefreshJti); rotation replaces currentRefreshJti
+// atomically, and a valid-signature token with a stale jti is a reuse.
+model Session {
+  id                String               @id @default(uuid()) @db.Uuid
+  userId            String               @map("user_id") @db.Uuid
+  currentRefreshJti String               @map("current_refresh_jti") @db.Uuid
+  refreshCount      Int                  @default(0) @map("refresh_count")
+  mfaVerifiedAt     DateTime?            @map("mfa_verified_at")
+  ip                String?              @db.VarChar(45)
+  userAgent         String?              @map("user_agent") @db.VarChar(512)
+  createdAt         DateTime             @default(now()) @map("created_at")
+  lastUsedAt        DateTime             @default(now()) @map("last_used_at")
+  // Absolute lifetime of the family; rotation never extends it.
+  expiresAt         DateTime             @map("expires_at")
+  revokedAt         DateTime?            @map("revoked_at")
+  revokedReason     SessionRevokeReason? @map("revoked_reason")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// OTP codes are never stored in plaintext: codeHash = HMAC-SHA256(OTP_PEPPER,
+// "<id>:<code>"). The row id is the `verificationId` returned to the client.
+model OtpCode {
+  id            String     @id @default(uuid()) @db.Uuid
+  userId        String     @map("user_id") @db.Uuid
+  phone         String     @db.VarChar(16)
+  purpose       OtpPurpose
+  codeHash      String     @map("code_hash") @db.Char(64)
+  attempts      Int        @default(0)
+  maxAttempts   Int        @map("max_attempts")
+  sendCount     Int        @default(1) @map("send_count")
+  lastSentAt    DateTime   @default(now()) @map("last_sent_at")
+  expiresAt     DateTime   @map("expires_at")
+  consumedAt    DateTime?  @map("consumed_at")
+  invalidatedAt DateTime?  @map("invalidated_at")
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("otp_codes")
+}
+
+// Delivery tracking only: the message text (which may contain an OTP) is
+// never persisted, and the phone is stored masked.
+model SmsMessage {
+  id                String    @id @default(uuid()) @db.Uuid
+  phoneMasked       String    @map("phone_masked") @db.VarChar(20)
+  purpose           String    @db.VarChar(50)
+  status            SmsStatus @default(QUEUED)
+  provider          String    @db.VarChar(30)
+  providerMessageId String?   @unique @map("provider_message_id") @db.VarChar(100)
+  attempts          Int       @default(0)
+  lastError         String?   @map("last_error") @db.VarChar(200)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  sentAt            DateTime? @map("sent_at")
+  deliveredAt       DateTime? @map("delivered_at")
+
+  @@index([status, createdAt])
+  @@map("sms_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Audit & idempotency
+// ---------------------------------------------------------------------------
+
+// Append-only: a trigger rejects UPDATE, DELETE and TRUNCATE, and the runtime
+// database role is granted INSERT/SELECT only.
+model AuditLog {
+  id           String    @id @default(uuid()) @db.Uuid
+  actorId      String?   @map("actor_id") @db.Uuid
+  actorRole    UserRole? @map("actor_role")
+  action       String    @db.VarChar(100)
+  resourceType String    @map("resource_type") @db.VarChar(50)
+  resourceId   String?   @map("resource_id") @db.VarChar(100)
+  oldValue     Json?     @map("old_value")
+  newValue     Json?     @map("new_value")
+  ip           String?   @db.VarChar(45)
+  userAgent    String?   @map("user_agent") @db.VarChar(512)
+  requestId    String?   @map("request_id") @db.VarChar(64)
+  timestamp    DateTime  @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId, timestamp])
+  @@index([resourceType, resourceId])
+  @@index([action, timestamp])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+// Written in the same transaction as the operation it protects, so a stored
+// response always corresponds to a committed operation.
+model IdempotencyKey {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  scope          String   @db.VarChar(120)
+  key            String   @db.VarChar(128)
+  requestHash    String   @map("request_hash") @db.Char(64)
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at")
+  expiresAt      DateTime @map("expires_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+model StoredFile {
+  id               String         @id @default(uuid()) @db.Uuid
+  ownerId          String         @map("owner_id") @db.Uuid
+  // Server-generated (UUID-based); user input never becomes part of a path.
+  storageKey       String         @unique @map("storage_key") @db.VarChar(255)
+  // Sanitized display name only — never used as a path.
+  originalName     String         @map("original_name") @db.VarChar(255)
+  mimeType         String         @map("mime_type") @db.VarChar(100)
+  sizeBytes        Int            @map("size_bytes")
+  sha256           String         @db.Char(64)
+  scanStatus       FileScanStatus @default(PENDING) @map("scan_status")
+  metadataStripped Boolean        @default(false) @map("metadata_stripped")
+  animalId         String?        @map("animal_id") @db.Uuid
+  deletedAt        DateTime?      @map("deleted_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+
+  owner  User    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  animal Animal? @relation(fields: [animalId], references: [id], onDelete: Restrict)
+
+  @@index([ownerId, deletedAt])
+  @@index([animalId])
+  @@map("stored_files")
+}
+
+// ---------------------------------------------------------------------------
+// Farm domain
+// ---------------------------------------------------------------------------
+
+model Farm {
+  id         String    @id @default(uuid()) @db.Uuid
+  ownerId    String    @map("owner_id") @db.Uuid
+  name       String    @db.VarChar(100)
+  region     String?   @db.VarChar(100)
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  owner             User               @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  animals           Animal[]
+  inventoryItems    InventoryItem[]
+  stockMovements    StockMovement[]
+  treatments        Treatment[]
+  rationAnimalTypes RationAnimalType[]
+  rations           Ration[]
+  rationIssues      RationIssue[]
+
+  @@index([ownerId, archivedAt])
+  @@map("farms")
+}
+
+model Animal {
+  id             String    @id @default(uuid()) @db.Uuid
+  farmId         String    @map("farm_id") @db.Uuid
+  // Unique per farm among non-archived animals (partial unique index).
+  tagNumber      String    @map("tag_number") @db.VarChar(50)
+  name           String?   @db.VarChar(100)
+  species        Species
+  sex            AnimalSex @default(UNKNOWN)
+  birthDate      DateTime? @map("birth_date") @db.Date
+  weightKg       Decimal?  @map("weight_kg") @db.Decimal(8, 2)
+  notes          String?   @db.VarChar(1000)
+  archivedAt     DateTime? @map("archived_at")
+  archivedReason String?   @map("archived_reason") @db.VarChar(500)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  farm       Farm         @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  treatments Treatment[]
+  files      StoredFile[]
+
+  @@index([farmId, archivedAt])
+  @@index([farmId, tagNumber])
+  @@map("animals")
+}
+
+model InventoryItem {
+  id                        String            @id @default(uuid()) @db.Uuid
+  farmId                    String            @map("farm_id") @db.Uuid
+  name                      String            @db.VarChar(120)
+  category                  InventoryCategory
+  unit                      InventoryUnit
+  // CHECK (quantity >= 0): stock can never go negative, even under races.
+  quantity                  Decimal           @default(0) @db.Decimal(14, 3)
+  medicineId                String?           @map("medicine_id") @db.Uuid
+  batchNumber               String?           @map("batch_number") @db.VarChar(64)
+  expiresOn                 DateTime?         @map("expires_on") @db.Date
+  openedAt                  DateTime?         @map("opened_at")
+  useWithinDaysAfterOpening Int?              @map("use_within_days_after_opening")
+  // Current price of one unit; every priced IN movement overwrites it.
+  unitPrice                 Decimal?          @map("unit_price") @db.Decimal(16, 2)
+  // Low-stock threshold: the item is "low" when quantity <= minQuantity.
+  minQuantity               Decimal?          @map("min_quantity") @db.Decimal(14, 3)
+  archivedAt                DateTime?         @map("archived_at")
+  createdAt                 DateTime          @default(now()) @map("created_at")
+  updatedAt                 DateTime          @updatedAt @map("updated_at")
+
+  farm        Farm            @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  medicine    Medicine?       @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  movements   StockMovement[]
+  doses       TreatmentDose[]
+  rationItems RationItem[]
+
+  @@index([farmId, archivedAt])
+  @@index([medicineId])
+  @@map("inventory_items")
+}
+
+// Append-only ledger (trigger rejects UPDATE/DELETE).
+model StockMovement {
+  id            String            @id @default(uuid()) @db.Uuid
+  itemId        String            @map("item_id") @db.Uuid
+  farmId        String            @map("farm_id") @db.Uuid
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(14, 3)
+  balanceAfter  Decimal           @map("balance_after") @db.Decimal(14, 3)
+  // Money is Decimal, never floating point.
+  unitCost      Decimal?          @map("unit_cost") @db.Decimal(16, 2)
+  currency      String?           @db.Char(3)
+  reason        String?           @db.VarChar(500)
+  actorId       String            @map("actor_id") @db.Uuid
+  // Set on the OUT movements written by a ration issue (CHECK: OUT only).
+  rationIssueId String?           @map("ration_issue_id") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  item        InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  farm        Farm          @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  actor       User          @relation("StockMovementActor", fields: [actorId], references: [id], onDelete: Restrict)
+  rationIssue RationIssue?  @relation(fields: [rationIssueId], references: [id], onDelete: Restrict)
+
+  @@index([itemId, createdAt])
+  @@index([farmId, createdAt])
+  @@index([rationIssueId])
+  @@map("stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Feed rations
+// ---------------------------------------------------------------------------
+
+// "Hayvon kategoriyasi". Each farm gets the four default types (one per
+// non-OTHER profile, partial unique index) lazily on first listing. Names are
+// unique per farm among non-archived types, case-insensitively (partial
+// unique index on lower(name)). sex NULL = any sex (CHECK: never UNKNOWN).
+model RationAnimalType {
+  id         String        @id @default(uuid()) @db.Uuid
+  farmId     String        @map("farm_id") @db.Uuid
+  name       String        @db.VarChar(60)
+  profile    RationProfile @default(OTHER)
+  species    Species
+  sex        AnimalSex?
+  isDefault  Boolean       @default(false) @map("is_default")
+  archivedAt DateTime?     @map("archived_at")
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+
+  farm    Farm     @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  rations Ration[]
+
+  @@index([farmId, archivedAt])
+  @@map("ration_animal_types")
+}
+
+// A saved feeding plan. Saving or calculating never changes stock; only an
+// issue (RationIssue) writes OUT movements. Archived = soft deleted.
+model Ration {
+  id                 String              @id @default(uuid()) @db.Uuid
+  farmId             String              @map("farm_id") @db.Uuid
+  // Same farm as the ration (trigger).
+  animalTypeId       String              @map("animal_type_id") @db.Uuid
+  name               String              @db.VarChar(100)
+  animalCount        Int                 @map("animal_count")
+  averageWeightKg    Decimal?            @map("average_weight_kg") @db.Decimal(8, 2)
+  ageMonths          Int?                @map("age_months")
+  purpose            FeedingPurpose
+  physiologicalState PhysiologicalState? @map("physiological_state")
+  milkYieldLiters    Decimal?            @map("milk_yield_liters") @db.Decimal(6, 2)
+  days               Int
+  notes              String?             @db.VarChar(500)
+  archivedAt         DateTime?           @map("archived_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  farm       Farm             @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  animalType RationAnimalType @relation(fields: [animalTypeId], references: [id], onDelete: Restrict)
+  items      RationItem[]
+  issues     RationIssue[]
+
+  @@index([farmId, archivedAt])
+  @@index([animalTypeId, archivedAt])
+  @@map("rations")
+}
+
+// One feed of a ration: a FEED inventory item of the ration's farm (trigger).
+// PATCH replaces the whole list (the only hard delete of this module).
+model RationItem {
+  id              String  @id @default(uuid()) @db.Uuid
+  rationId        String  @map("ration_id") @db.Uuid
+  inventoryItemId String  @map("inventory_item_id") @db.Uuid
+  dailyPerAnimal  Decimal @map("daily_per_animal") @db.Decimal(9, 3)
+  position        Int
+
+  ration        Ration        @relation(fields: [rationId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@unique([rationId, inventoryItemId])
+  @@index([inventoryItemId])
+  @@map("ration_items")
+}
+
+// Append-only (trigger rejects UPDATE/DELETE/TRUNCATE): one real consumption
+// of a ration, with the OUT movements that reference it.
+model RationIssue {
+  id          String   @id @default(uuid()) @db.Uuid
+  rationId    String   @map("ration_id") @db.Uuid
+  // Same farm as the ration (trigger).
+  farmId      String   @map("farm_id") @db.Uuid
+  days        Int
+  // Snapshot of the ration's animal count at issue time.
+  animalCount Int      @map("animal_count")
+  actorId     String   @map("actor_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  ration    Ration          @relation(fields: [rationId], references: [id], onDelete: Restrict)
+  farm      Farm            @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  actor     User            @relation("RationIssueActor", fields: [actorId], references: [id], onDelete: Restrict)
+  movements StockMovement[]
+
+  @@index([rationId, createdAt])
+  @@index([farmId, createdAt])
+  @@map("ration_issues")
+}
+
+// ---------------------------------------------------------------------------
+// Veterinary domain
+// ---------------------------------------------------------------------------
+
+// Only APPROVED medicines may be shown to farmers or used in treatments.
+// Clinical fields of an APPROVED medicine are immutable (trigger).
+model Medicine {
+  id                 String         @id @default(uuid()) @db.Uuid
+  name               String         @db.VarChar(150)
+  activeIngredient   String         @map("active_ingredient") @db.VarChar(150)
+  form               String?        @db.VarChar(50)
+  concentration      String?        @db.VarChar(50)
+  withdrawalMeatDays Int            @map("withdrawal_meat_days")
+  withdrawalMilkDays Int            @map("withdrawal_milk_days")
+  status             MedicineStatus @default(DRAFT)
+  isDemo             Boolean        @default(false) @map("is_demo")
+  createdById        String         @map("created_by_id") @db.Uuid
+  approvedById       String?        @map("approved_by_id") @db.Uuid
+  approvedAt         DateTime?      @map("approved_at")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  createdBy      User            @relation("MedicineCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy     User?           @relation("MedicineApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  inventoryItems InventoryItem[]
+  protocolDrugs  ProtocolDrug[]
+  treatmentDoses TreatmentDose[]
+
+  @@index([status])
+  @@map("medicines")
+}
+
+// Container only; all clinical content lives in immutable-once-approved
+// ProtocolVersion rows.
+model Protocol {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String    @unique @db.VarChar(50)
+  species     Species
+  isDemo      Boolean   @default(false) @map("is_demo")
+  createdById String    @map("created_by_id") @db.Uuid
+  archivedAt  DateTime? @map("archived_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  createdBy User              @relation("ProtocolCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  versions  ProtocolVersion[]
+
+  @@index([species])
+  @@map("protocols")
+}
+
+// At most one APPROVED and one DRAFT version per protocol (partial unique
+// indexes). Approved content is immutable (trigger); changes require a new
+// version, which supersedes the old one when a VET approves it.
+model ProtocolVersion {
+  id           String                @id @default(uuid()) @db.Uuid
+  protocolId   String                @map("protocol_id") @db.Uuid
+  version      Int
+  status       ProtocolVersionStatus @default(DRAFT)
+  title        String                @db.VarChar(200)
+  condition    String                @db.VarChar(200)
+  // Emergency protocols never yield automatic medicine recommendations.
+  isEmergency  Boolean               @default(false) @map("is_emergency")
+  instructions String                @db.VarChar(5000)
+  createdById  String                @map("created_by_id") @db.Uuid
+  approvedById String?               @map("approved_by_id") @db.Uuid
+  approvedAt   DateTime?             @map("approved_at")
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+
+  protocol   Protocol       @relation(fields: [protocolId], references: [id], onDelete: Restrict)
+  createdBy  User           @relation("ProtocolVersionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?          @relation("ProtocolVersionApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  drugs      ProtocolDrug[]
+  treatments Treatment[]
+
+  @@unique([protocolId, version])
+  @@index([status])
+  @@map("protocol_versions")
+}
+
+model ProtocolDrug {
+  id                String              @id @default(uuid()) @db.Uuid
+  protocolVersionId String              @map("protocol_version_id") @db.Uuid
+  medicineId        String              @map("medicine_id") @db.Uuid
+  dosePerKg         Decimal             @map("dose_per_kg") @db.Decimal(10, 4)
+  doseUnit          DoseUnit            @map("dose_unit")
+  maxSingleDose     Decimal?            @map("max_single_dose") @db.Decimal(12, 4)
+  route             AdministrationRoute
+  frequencyPerDay   Int                 @map("frequency_per_day")
+  durationDays      Int                 @map("duration_days")
+  sortOrder         Int                 @default(0) @map("sort_order")
+
+  protocolVersion ProtocolVersion @relation(fields: [protocolVersionId], references: [id], onDelete: Restrict)
+  medicine        Medicine        @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+
+  @@unique([protocolVersionId, medicineId])
+  @@index([medicineId])
+  @@map("protocol_drugs")
+}
+
+// Everything clinically relevant is snapshotted when treatment starts, so
+// later changes to the animal, medicine or protocol never alter history.
+model Treatment {
+  id                  String          @id @default(uuid()) @db.Uuid
+  farmId              String          @map("farm_id") @db.Uuid
+  animalId            String          @map("animal_id") @db.Uuid
+  protocolVersionId   String          @map("protocol_version_id") @db.Uuid
+  startedById         String          @map("started_by_id") @db.Uuid
+  status              TreatmentStatus @default(ACTIVE)
+  startedAt           DateTime        @default(now()) @map("started_at")
+  endsOn              DateTime        @map("ends_on") @db.Date
+  animalWeightKg      Decimal         @map("animal_weight_kg") @db.Decimal(8, 2)
+  protocolSnapshot    Json            @map("protocol_snapshot")
+  withdrawalMeatUntil DateTime        @map("withdrawal_meat_until") @db.Date
+  withdrawalMilkUntil DateTime        @map("withdrawal_milk_until") @db.Date
+  notes               String?         @db.VarChar(1000)
+  completedAt         DateTime?       @map("completed_at")
+  cancelledAt         DateTime?       @map("cancelled_at")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  farm            Farm            @relation(fields: [farmId], references: [id], onDelete: Restrict)
+  animal          Animal          @relation(fields: [animalId], references: [id], onDelete: Restrict)
+  protocolVersion ProtocolVersion @relation(fields: [protocolVersionId], references: [id], onDelete: Restrict)
+  startedBy       User            @relation("TreatmentStartedBy", fields: [startedById], references: [id], onDelete: Restrict)
+  doses           TreatmentDose[]
+
+  @@index([animalId, startedAt])
+  @@index([farmId, status])
+  @@map("treatments")
+}
+
+// Immutable per-drug snapshot (trigger rejects UPDATE/DELETE).
+model TreatmentDose {
+  id                 String              @id @default(uuid()) @db.Uuid
+  treatmentId        String              @map("treatment_id") @db.Uuid
+  medicineId         String              @map("medicine_id") @db.Uuid
+  inventoryItemId    String?             @map("inventory_item_id") @db.Uuid
+  medicineName       String              @map("medicine_name") @db.VarChar(150)
+  dosePerKg          Decimal             @map("dose_per_kg") @db.Decimal(10, 4)
+  doseUnit           DoseUnit            @map("dose_unit")
+  singleDose         Decimal             @map("single_dose") @db.Decimal(12, 4)
+  route              AdministrationRoute
+  frequencyPerDay    Int                 @map("frequency_per_day")
+  durationDays       Int                 @map("duration_days")
+  withdrawalMeatDays Int                 @map("withdrawal_meat_days")
+  withdrawalMilkDays Int                 @map("withdrawal_milk_days")
+  batchNumber        String?             @map("batch_number") @db.VarChar(64)
+  itemExpiresOn      DateTime?           @map("item_expires_on") @db.Date
+  createdAt          DateTime            @default(now()) @map("created_at")
+
+  treatment     Treatment      @relation(fields: [treatmentId], references: [id], onDelete: Restrict)
+  medicine      Medicine       @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@index([treatmentId])
+  @@map("treatment_doses")
+}
+
+// ---------------------------------------------------------------------------
+// Disease reference ("Molim kasal")
+// ---------------------------------------------------------------------------
+
+// Immutable reference data (trigger rejects UPDATE/DELETE/TRUNCATE on all
+// three tables): a corrected text is a new source key, never an in-place
+// edit. Loaded by src/diseases/disease-seed.ts from prisma/data/*.txt.
+model DiseaseSource {
+  id            String   @id @default(uuid()) @db.Uuid
+  // e.g. 'kasalliklar-v1'
+  key           String   @unique @db.VarChar(50)
+  // The abbreviations line, verbatim.
+  abbreviations String
+  // The whole source file, verbatim.
+  fullText      String   @map("full_text")
+  // sha256 (hex) of the file's UTF-8 bytes.
+  checksum      String   @db.Char(64)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  groups   DiseaseGroup[]
+  diseases Disease[]
+
+  @@map("disease_sources")
+}
+
+model DiseaseGroup {
+  id       String @id @default(uuid()) @db.Uuid
+  sourceId String @map("source_id") @db.Uuid
+  number   Int
+  // The exact heading line ("1-Bo'lim. …").
+  heading  String
+  // The heading without its "N-Bo'lim. " prefix.
+  title    String
+
+  source   DiseaseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  diseases Disease[]
+
+  @@unique([sourceId, number])
+  @@map("disease_groups")
+}
+
+model Disease {
+  id              String            @id @default(uuid()) @db.Uuid
+  sourceId        String            @map("source_id") @db.Uuid
+  // A group of the same source (trigger).
+  groupId         String            @map("group_id") @db.Uuid
+  number          Int
+  // Title line without "N. "; name/scientificNames split it, nothing else.
+  title           String
+  name            String
+  scientificNames String?           @map("scientific_names")
+  symptoms        String?
+  animals         DiseaseAnimal[]
+  // [{ kind, text }] — one entry per source line, text verbatim.
+  lines           Json
+  // lines' text joined with "\n".
+  fullText        String            @map("full_text")
+  // normalize(title + " " + symptoms): the only thing search matches.
+  searchText      String            @map("search_text")
+  status          DiseaseInfoStatus @default(SOURCE_TEXT)
+  createdAt       DateTime          @default(now()) @map("created_at")
+
+  source DiseaseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  group  DiseaseGroup  @relation(fields: [groupId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceId, number])
+  @@index([groupId])
+  @@map("diseases")
+}

@@ -1,0 +1,73 @@
+# Production: PostgreSQL, Redis and S3 are managed services (RDS, ElastiCache,
+# S3) in private subnets — no database or cache container and no published
+# database port here. No secrets live in this file: they are read from an env
+# file rendered on the server from the secret manager (never committed, never
+# baked into the image). See docs/operations/deployment.md.
+#
+#   export API_IMAGE=<registry>/meningfermam-api:<git-sha>
+#   docker compose -f compose.prod.yaml run --rm migrate   # release step
+#   docker compose -f compose.prod.yaml up -d api
+
+name: meningfermam
+
+x-api: &api
+  image: ${API_IMAGE:?API_IMAGE ni belgilang, masalan <registry>/meningfermam-api:<git-sha>}
+  build:
+    # Monorepo root: the workspace lockfile lives there.
+    context: ../..
+    dockerfile: apps/backend/Dockerfile
+  env_file:
+    - path: ${API_ENV_FILE:-/etc/meningfermam/api.env}
+      required: true
+  environment:
+    NODE_ENV: production
+  user: "10001:10001"
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  api:
+    <<: *api
+    restart: unless-stopped
+    command: ["serve"]
+    ports:
+      # Loopback only: the TLS reverse proxy on the same host is the single
+      # public entry point (TRUST_PROXY=1 in the env file).
+      - "127.0.0.1:${API_PORT:-3001}:3001"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          memory: 256M
+
+  # Release command. Needs MIGRATION_DATABASE_URL (schema owner) in its own
+  # env file; the API's env file carries only the least-privilege
+  # DATABASE_URL (meningfermam_app).
+  migrate:
+    <<: *api
+    profiles: ["release"]
+    restart: "no"
+    command: ["migrate"]
+    env_file:
+      - path: ${MIGRATE_ENV_FILE:-/etc/meningfermam/migrate.env}
+        required: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M

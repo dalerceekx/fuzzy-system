@@ -1,0 +1,126 @@
+name: meningfermam-dev
+
+services:
+  api:
+    build:
+      # Monorepo root: the workspace lockfile lives there.
+      context: ../..
+      dockerfile: apps/backend/Dockerfile.dev
+    ports:
+      - "127.0.0.1:${API_PORT:-3001}:3001"
+    env_file:
+      - .env
+    environment:
+      # Inside the container `localhost` is the API itself, so always use
+      # compose service names, whatever .env says.
+      # Dev credentials chosen by the project owner (dev only). `postgres`
+      # owns the schema and runs migrations; the least-privilege runtime
+      # role `meningfermam_app` (created by docker/postgres/init) is what
+      # production uses — see docs/operations/database.md to try it locally.
+      DATABASE_URL: postgresql://postgres:1234@postgres:5432/meningfermam?schema=public
+      MIGRATION_DATABASE_URL: postgresql://postgres:1234@postgres:5432/meningfermam?schema=public
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      TZ: UTC
+      # Prisma upgrades come through Dependabot: no CLI update banner and no
+      # version-check calls (same as the production image).
+      CHECKPOINT_DISABLE: "1"
+      PRISMA_HIDE_UPDATE_MESSAGE: "1"
+    healthcheck:
+      # Readiness (database, Redis, storage): `npm run dev:up` waits for it.
+      # The first start also installs dependencies, migrates, seeds and
+      # compiles, hence the long grace period.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+    volumes:
+      - ../..:/repo
+      # Linux node_modules stay in volumes so macOS binaries never mix in.
+      - api_node_modules:/repo/node_modules
+      - api_backend_node_modules:/repo/apps/backend/node_modules
+      - api_frontend_node_modules:/repo/apps/frontend/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  postgres:
+    image: postgres:16.15-alpine3.24
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "1234"
+      POSTGRES_DB: meningfermam
+      # Dev-only password of the runtime role created by the init script.
+      APP_DB_PASSWORD: meningfermam_app_dev
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once on a fresh volume: runtime role + meningfermam_test DB.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d meningfermam"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4.11-alpine3.21
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # minio/minio and minio/mc are no longer published on Docker Hub;
+  # pgsty/* is the community-maintained fork with the web console intact.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb --ignore-existing local/meningfermam-private;
+      mc anonymous set none local/meningfermam-private;
+      "
+
+volumes:
+  api_node_modules:
+  api_backend_node_modules:
+  api_frontend_node_modules:
+  postgres_data:
+  redis_data:
+  minio_data:

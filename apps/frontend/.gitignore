@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+*.log
+
+# Local env files may hold dev-only demo credentials — never commit them.
+.env
+.env.*
+!.env.example

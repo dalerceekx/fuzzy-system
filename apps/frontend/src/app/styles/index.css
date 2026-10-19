@@ -1,0 +1,378 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/*
+ * Ferma boshqaruvi — design tokens (source of truth).
+ * Warm "straw" palette: white cards on a cream background, straw for
+ * active navigation, buttons and highlights. No dark surfaces.
+ */
+:root {
+  --background: #fbf8f1;
+  --card-background: #ffffff;
+
+  --primary: #c9a24a;
+  --primary-hover: #b8923f;
+  --primary-light: #f4ead2;
+  /* Active tab/sheet text: straw-dark darkened to 5:1 on the tab indicator. */
+  --primary-dark: #7c6122;
+
+  --text-primary: #2f2a1f;
+  --text-secondary: #645d4f;
+
+  --border: #e8dcbf;
+  --card-shadow: 0 1px 2px rgba(60, 45, 10, 0.05), 0 4px 16px rgba(60, 45, 10, 0.05);
+
+  --success: #356b4a;
+  --danger: #a33c37;
+  --warning: #92620a;
+
+  --input-background: #ffffff;
+
+  /* Derived tokens (kept AA-compliant): muted text 5.1:1 on white, input
+     borders 3.1:1 (WCAG 1.4.11), focus ring 5.3:1. */
+  --text-muted: #756d5e;
+  --input-border: #9c917c;
+  --focus-ring: #92620a;
+  --success-light: #e8f1eb;
+  --danger-light: #f8e9e8;
+  --warning-light: #fdf3dc;
+  --neutral-light: #f3efe6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-card: var(--card-background);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-light: var(--primary-light);
+  --color-primary-dark: var(--primary-dark);
+  --color-ink: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-muted: var(--text-muted);
+  --color-line: var(--border);
+  --color-input: var(--input-background);
+  --color-input-line: var(--input-border);
+  --color-focus: var(--focus-ring);
+  --color-success: var(--success);
+  --color-success-light: var(--success-light);
+  --color-danger: var(--danger);
+  --color-danger-light: var(--danger-light);
+  --color-warning: var(--warning);
+  --color-warning-light: var(--warning-light);
+  --color-neutral-light: var(--neutral-light);
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --radius-card: 14px;
+  --radius-control: 10px;
+
+  --shadow-card: var(--card-shadow);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--background);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  ::placeholder {
+    color: var(--text-muted);
+    opacity: 1;
+  }
+
+  button,
+  [role='button'] {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .farm-logo {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #e2c06c, #b4862c);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  /* ---------- Pastki tab-bar — Telegram (iOS) uslubi ---------- */
+  .tabbar-wrap {
+    /* Tab count (set inline); the bar grows with it: 3 → 420px, 4 → 480px. */
+    --n: 3;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    z-index: 35;
+    width: min(calc(60px * var(--n) + 240px), calc(100% - 24px));
+    margin: 0 auto;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter Variable', system-ui, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .tabbar {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(var(--n), 1fr);
+    padding: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.88);
+    -webkit-backdrop-filter: blur(22px) saturate(1.8);
+    backdrop-filter: blur(22px) saturate(1.8);
+    border: 0.5px solid rgba(60, 45, 10, 0.08);
+    box-shadow:
+      0 10px 34px rgba(60, 45, 10, 0.14),
+      0 2px 6px rgba(60, 45, 10, 0.06),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+  .tab-indicator {
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 5px;
+    width: calc((100% - 10px) / var(--n));
+    border-radius: 999px;
+    background: rgba(201, 162, 74, 0.18);
+    transform: translateX(calc(var(--i, 0) * 100%));
+    transition: transform 0.5s cubic-bezier(0.34, 1.3, 0.64, 1);
+  }
+  .tab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    min-height: 56px;
+    padding: 6px 4px 5px;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    font: inherit;
+    color: var(--text-primary);
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      color 0.25s,
+      transform 0.15s;
+  }
+  .tab:active {
+    transform: scale(0.93);
+  }
+  .tab:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+  .tab.active {
+    color: var(--primary-dark);
+  }
+  .tab-icon {
+    position: relative;
+    display: grid;
+    place-items: center;
+  }
+  .tab-icon svg {
+    width: 26px;
+    height: 26px;
+    stroke-width: 1.8;
+  }
+  .tab.active .tab-icon svg {
+    stroke-width: 2.2;
+  }
+  .tab-label {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.15;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .tab.active .tab-label {
+    font-weight: 600;
+  }
+  .tab-badge {
+    position: absolute;
+    top: -6px;
+    left: calc(100% - 9px);
+    min-width: 19px;
+    height: 19px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #d6302a;
+    color: #fff;
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 19px;
+    text-align: center;
+    box-shadow: 0 0 0 2px #fff;
+  }
+
+  /* Tab-bar ustida ochiladigan oynachalar ("Ombor", "Boshqa") */
+  .more-shade {
+    position: fixed;
+    inset: 0;
+    z-index: 34;
+    background: rgba(47, 42, 31, 0.18);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .more-shade.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .more-sheet {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 10px);
+    width: min(280px, 100%);
+    overflow: hidden;
+    border-radius: 22px;
+    background: rgba(236, 231, 219, 0.94);
+    -webkit-backdrop-filter: blur(24px) saturate(1.8);
+    backdrop-filter: blur(24px) saturate(1.8);
+    box-shadow:
+      0 18px 50px rgba(60, 45, 10, 0.22),
+      0 2px 8px rgba(60, 45, 10, 0.08);
+    transform-origin: calc(100% - 50px) 100%;
+    opacity: 0;
+    transform: translateY(10px) scale(0.6);
+    visibility: hidden;
+    transition:
+      opacity 0.2s,
+      transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s 0.3s;
+  }
+  .more-sheet.left {
+    left: 0;
+    right: auto;
+    transform-origin: 50px 100%;
+  }
+  /* An inner tab's sheet: centred over its button (--sheet-i), kept inside the bar. */
+  .more-sheet.center {
+    right: auto;
+    left: clamp(
+      0px,
+      calc(5px + (var(--sheet-i, 0) + 0.5) * (100% - 10px) / var(--n) - min(140px, 50%)),
+      calc(100% - min(280px, 100%))
+    );
+    transform-origin: 50% 100%;
+  }
+  .more-sheet.open {
+    opacity: 1;
+    transform: none;
+    visibility: visible;
+    transition:
+      opacity 0.2s,
+      transform 0.45s cubic-bezier(0.34, 1.25, 0.64, 1),
+      visibility 0s;
+  }
+  .more-group {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    background: rgba(255, 255, 255, 0.9);
+  }
+  .more-group + .more-group {
+    margin-top: 8px;
+  }
+  .more-link {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 0 16px 0 12px;
+    color: var(--text-primary);
+    font-size: 16px;
+  }
+  .more-group li + li .more-link::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 54px;
+    right: 0;
+    border-top: 0.5px solid rgba(60, 45, 10, 0.14);
+  }
+  .more-link:hover {
+    background: rgba(255, 255, 255, 0.7);
+  }
+  .more-link:active {
+    background: rgba(60, 45, 10, 0.08);
+  }
+  .more-link:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+  .more-link.active {
+    color: var(--primary-dark);
+    font-weight: 600;
+    background: rgba(201, 162, 74, 0.14);
+  }
+  .nav-icon {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    color: #fff;
+  }
+  .nav-icon svg {
+    width: 18px;
+    height: 18px;
+    stroke-width: 2;
+  }
+
+  @media (max-width: 760px) {
+    .tabbar-wrap {
+      bottom: calc(10px + env(safe-area-inset-bottom));
+    }
+  }
+
+  @media print {
+    .tabbar-wrap,
+    .more-shade {
+      display: none !important;
+    }
+  }
+}

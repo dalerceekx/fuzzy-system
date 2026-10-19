@@ -1,0 +1,23 @@
+# This file replaces the root ignore file for the frontend build.
+**
+!package.json
+!package-lock.json
+!.npmrc
+!apps/
+!apps/backend/
+!apps/backend/package.json
+!apps/frontend/
+!apps/frontend/**
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.env*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.log
+**/.git
+**/backups
+**/uploads

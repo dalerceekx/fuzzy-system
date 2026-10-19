@@ -1,0 +1,57 @@
+# Build context is the monorepo root (see apps/backend/Dockerfile*).
+# Dependencies and build output are produced inside the image.
+**/node_modules
+**/dist
+**/coverage
+**/src/generated
+**/*.tsbuildinfo
+
+# Secrets must never be baked into an image. `.env.example` is excluded too:
+# the image has no use for it.
+**/.env*
+.deploy
+deploy
+
+# Uploads, dumps, backups, keys.
+**/uploads
+**/backups
+**/*.dump
+**/*.sql.gz
+**/*.age
+**/*.gpg
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Never part of the production image: tests, demo seed, docs, CI, ops
+# scripts. (The dev image bind-mounts the repo, so it still sees them.)
+apps/backend/test
+apps/backend/prisma/seed.ts
+apps/backend/prisma/demo
+apps/backend/docs
+apps/backend/scripts
+apps/backend/**/*.spec.ts
+apps/backend/**/*.e2e-spec.ts
+**/.github
+.github
+**/*.md
+
+# Frontend sources are not part of the backend image; only its manifest is
+# needed so `npm ci` accepts the workspace lockfile.
+apps/frontend/**
+!apps/frontend/package.json
+
+# VCS, editors, agent tooling, OS.
+.git
+.gitignore
+**/.gitignore
+**/.gitleaks.toml
+**/.semgrep.yml
+.vscode
+.idea
+.agents
+.claude
+.windsurf
+**/.DS_Store
+**/*.log

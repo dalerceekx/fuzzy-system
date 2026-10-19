@@ -1,0 +1,46 @@
+# gitleaks configuration (CI: `gitleaks git` over the full history, --redact).
+# Default rules stay on. Allowlists are deliberately narrow: a file AND a
+# line marker must both match, and they only cover throwaway values that are
+# documented as dev/test/CI-only. Never add a real secret here — rotate it.
+
+title = "Mening Fermam"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented development-only example values"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^apps/backend/\.env\.example$''',
+  '''^apps/backend/compose\.dev\.yaml$''',
+  '''^apps/backend/README\.md$''',
+  '''^apps/backend/docs/.*\.md$''',
+]
+regexes = [
+  '''dev-only''',
+  # base64 of "dev-only-…" (DATA_ENCRYPTION_KEY example)
+  '''ZGV2LW9ubHkt''',
+  '''minioadmin''',
+  '''postgres:1234@''',
+  '''"1234"''',
+  '''meningfermam_app_dev''',
+  '''Demo(Admin|Farmer)123!''',
+  '''<[a-z0-9_ -]+>''',
+]
+
+[[allowlists]]
+description = "Test-only fixtures and the CI service-container password"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^apps/backend/test/''',
+  '''^apps/backend/src/.*\.spec\.ts$''',
+  '''^\.github/workflows/ci\.yml$''',
+]
+regexes = [
+  '''test-only''',
+  '''ci_only_password''',
+  '''Test-password-123''',
+]
