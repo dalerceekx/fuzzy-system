@@ -20,7 +20,7 @@ RUN go mod download
 COPY apps/frontend/caddy/main.go ./
 RUN CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -mod=readonly -trimpath -ldflags='-s -w' -o /caddy .
 
-FROM caddy:2.11.7-alpine
+FROM caddy:2.11.8-alpine
 COPY --from=caddy-build /caddy /usr/bin/caddy
 RUN addgroup -S -g 10001 app \
   && adduser -S -D -H -u 10001 -G app app \
