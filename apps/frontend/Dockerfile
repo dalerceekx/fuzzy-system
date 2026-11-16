@@ -13,7 +13,7 @@ RUN npm run build && npm run verify:bundle
 
 # Rebuild the official Caddy release with patched Go/x/net. The upstream
 # 2.11.7 binary was built with Go 1.26.8 and contains fixed HIGH CVEs.
-FROM golang:1.27.2-alpine3.24 AS caddy-build
+FROM golang:1.27.3-alpine3.24 AS caddy-build
 WORKDIR /src
 COPY apps/frontend/caddy/go.mod apps/frontend/caddy/go.sum ./
 RUN go mod download
